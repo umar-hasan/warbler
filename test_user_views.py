@@ -4,12 +4,9 @@
 #
 #    python -m unittest test_user_model.py
 
-
 import os
 from unittest import TestCase
 from models import db, User, Message, Follows, Likes
-from flask import session
-
 
 # BEFORE we import our app, let's set an environmental variable
 # to use a different database for tests (we need to do this
@@ -28,8 +25,10 @@ from app import app, CURR_USER_KEY
 # and create fresh new clean test data
 
 db.create_all()
+db.session.expire_on_commit = False
 
 app.config['WTF_CSRF_ENABLED'] = False
+
 
 
 class UserViewTestCase(TestCase):
@@ -40,6 +39,7 @@ class UserViewTestCase(TestCase):
 
         db.drop_all()
         db.create_all()
+        
 
         app.config["TESTING"] = True
         User.query.delete()
@@ -57,10 +57,14 @@ class UserViewTestCase(TestCase):
                                     password="testuser",
                                     image_url=None)
 
-        self.testuser1.id = 101
-        self.testuser2.id = 102
+        self.testuser1_id = 101
+        self.testuser2_id = 102
+        self.testuser1.id = self.testuser1_id
+        self.testuser2.id = self.testuser2_id
 
         db.session.commit()
+
+        
 
         
 
@@ -76,82 +80,116 @@ class UserViewTestCase(TestCase):
             'form-login-password': "testuser"
         })
 
+    def set_followers(self):
+        follow = Follows(user_being_followed_id=self.testuser2_id, user_following_id=self.testuser1_id)
+        db.session.add(follow)
+        db.session.commit()
+
+    def test_users_index(self):
+        resp = self.client.get("/users")
+
+        self.assertIn("@testuser1", str(resp.data))
+        self.assertIn("@testuser2", str(resp.data))
+
     
-    # def test_follow_pages_logged_in(self):
-    #     """Tests user follower/following pages."""
+    def test_follow_pages_logged_in(self):
+        """Tests user follower/following pages."""
 
-    #     with self.client.session_transaction() as s:
-    #         s[CURR_USER_KEY] = self.testuser1.id
 
-    #         follow = Follows(user_being_followed_id=self.testuser1.id, user_following_id=self.testuser2.id)
-    #         db.session.add(follow)
-    #         db.session.commit()
+        with self.client.session_transaction() as s:
+            s[CURR_USER_KEY] = self.testuser1.id
 
-    #         res = self.client.get(f"/users/{self.testuser1.id}/following")
-    #         html = res.get_data(as_text=True)
+        self.client.post(f"/users/follow/{self.testuser2_id}")
 
-    #         self.assertEqual(res.status_code, 200)
-    #         self.assertIn("@testuser2", html)
+        res = self.client.get(f"/users/{self.testuser1_id}/following")
+        html = res.get_data(as_text=True)
 
-    #         res = self.client.get(f"/users/{self.testuser2.id}/followers")
-    #         html = res.get_data(as_text=True)
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("@testuser2", html)
 
-    #         self.assertEqual(res.status_code, 200)
-    #         self.assertIn("@testuser1", html)
+        res = self.client.get(f"/users/{self.testuser2_id}/followers")
+        html = res.get_data(as_text=True)
+
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("@testuser1", html)
         
     
-    # def test_follow_pages_logged_out(self):
-    #     """Tests user follower/following pages."""
+    def test_follow_pages_logged_out(self):
+        """Tests user follower/following pages."""
 
-    #     follow = Follows(user_being_followed_id=self.testuser2.id, user_following_id=self.testuser1.id)
-    #     db.session.add(follow)
+        res = self.client.get(f"/users/{self.testuser1_id}/following")
+        self.assertEqual(res.status_code, 302)
 
-    #     req = self.client.get(f"/users/101/following")
-    #     html = req.get_data(as_text=True)
+        res = self.client.get("/")
+        html = res.get_data(as_text=True)
+        self.assertIn("Access unauthorized.", html)
 
-    #     self.assertEqual(req.status_code, 302)
+        res = self.client.get(f"/users/{self.testuser2_id}/followers")
+        self.assertEqual(res.status_code, 302)
 
-    #     res = self.client.get(f"/users/102/followers")
-
-    #     self.assertEqual(res.status_code, 200)
-    #     self.assertIn("@testuser2", html)
+        res = self.client.get("/")
+        html = res.get_data(as_text=True)
+        self.assertIn("Access unauthorized.", html)
 
 
     def test_message_logged_in(self):
         """Tests messaging when logged in."""
 
-        msg = Message(text="Test message.", user_id=self.testuser1.id)
-        db.session.add(msg)
-        db.session.commit()
         with self.client.session_transaction() as s:
             s[CURR_USER_KEY] = self.testuser1.id
 
-            res = self.client.get(f"/messages/{msg.id}")
-            self.assertIn("Test message.", str(res.data))
+        self.client.post("/messages/new", data={
+            'text': "Test message."
+        })
+
+        msg = Message.query.filter_by(user_id=self.testuser1_id).first()
+
+        res = self.client.get(f"/messages/{msg.id}")
+        self.assertIn("Test message.", str(res.data))
 
     
-    # def test_message_logged_out(self):
-    #     """Tests messaging when logged out."""
+    def test_message_logged_out(self):
+        """Tests messaging when logged out."""
 
-    #     msg = Message(text="Test message.", user_id=self.testuser1.id)
-    #     db.session.add(msg)
-    #     db.session.commit()
+        res = self.client.post("/messages/new", data={
+            'text': "Test message."
+        })
+        self.assertEqual(res.status_code, 302)
 
-    #     res = self.client.get(f"/messages/{msg.id}")
-    #     self.assertIn("Access unauthorized.", str(res.data))
+        res = self.client.get("/")
+        self.assertIn("Access unauthorized.", str(res.data))
 
     
-    def test_like(self):
-        """Tests if a user can like a message."""
-
-        msg = Message(text="Test message.", user_id=self.testuser2.id)
-        db.session.add(msg)
-        db.session.commit()
+    def test_like_logged_in(self):
+        """Tests if a user can like a message when logged in."""
 
         with self.client.session_transaction() as s:
             s[CURR_USER_KEY] = self.testuser1.id
 
-            res = self.client.post(f"/users/add_like/{msg.id}")
+        res = self.client.post("/messages/new", data={
+            'text': "Test message."
+        })
 
-            self.assertEqual(res.status_code, 302)
-            self.assertEqual(len(self.testuser1.likes), 1)
+        msg = Message.query.filter_by(user_id=self.testuser1_id).first()
+
+        res = self.client.post(f"/users/add_like/{msg.id}")
+        likes = Likes.query.filter_by(user_id=self.testuser1_id).all()
+
+        self.assertEqual(res.status_code, 302)
+        self.assertEqual(len(likes), 1)
+
+
+    def test_like_logged_out(self):
+        """Tests if a user can like a message when logged out."""
+
+        msg = Message(text="Test message", user_id=self.testuser1_id)
+        db.session.add(msg)
+        db.session.commit()
+
+        msg = Message.query.filter_by(user_id=self.testuser1_id).first()
+
+        res = self.client.post(f"/users/add_like/{msg.id}")
+        self.assertEqual(res.status_code, 302)
+
+        res = self.client.get("/")
+        self.assertIn("Access unauthorized.", str(res.data))
