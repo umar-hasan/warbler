@@ -5,7 +5,7 @@ from flask_debugtoolbar import DebugToolbarExtension
 from sqlalchemy.exc import IntegrityError
 
 from forms import UserAddForm, LoginForm, MessageForm, EditUserForm
-from models import db, connect_db, User, Message
+from models import db, connect_db, User, Message, Likes
 
 CURR_USER_KEY = "curr_user"
 
@@ -144,7 +144,7 @@ def users_show(user_id):
     """Show user profile."""
 
     user = User.query.get_or_404(user_id)
-    likes_num = len(user.likes)
+    likes_num = Likes.query.filter_by(user_id=user.id).count()
 
     # snagging messages in order from the database;
     # user.messages won't be in order by default
@@ -194,7 +194,8 @@ def show_following(user_id):
         return redirect("/")
 
     user = User.query.get_or_404(user_id)
-    return render_template('users/following.html', user=user)
+    likes_num = Likes.query.filter_by(user_id=user.id).count()
+    return render_template('users/following.html', user=user, likes=likes_num)
 
 
 @app.route('/users/<int:user_id>/followers')
@@ -206,7 +207,8 @@ def users_followers(user_id):
         return redirect("/")
 
     user = User.query.get_or_404(user_id)
-    return render_template('users/followers.html', user=user)
+    likes_num = Likes.query.filter_by(user_id=user.id).count()
+    return render_template('users/followers.html', user=user, likes=likes_num)
 
 
 @app.route('/users/follow/<int:follow_id>', methods=['POST'])
@@ -243,19 +245,28 @@ def stop_following(follow_id):
 def profile():
     """Update profile for current user."""
 
-    # IMPLEMENT THIS
     form = EditUserForm()
+    
     if form.validate_on_submit():
         user = User.authenticate(g.user.username, form.password.data)
         if user:
             user.username = form.username.data
             user.email = form.email.data
+            user.location = form.location.data
             user.bio = form.bio.data
             user.header_image_url = form.header_image_url.data or User.header_image_url.default.arg
             user.image_url = form.image_url.data or User.image_url.default.arg
+            db.session.commit()
             return redirect(f"/users/{g.user.id}")
         else:
             flash("Invalid password. Try again.", "danger")
+
+    form.username.data = g.user.username
+    form.email.data = g.user.email
+    form.location.data = g.user.location
+    form.bio.data = g.user.bio
+    form.header_image_url.data = g.user.header_image_url
+    form.image_url.data = g.user.image_url
 
     return render_template("users/edit.html", form=form)
 
